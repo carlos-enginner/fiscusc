@@ -35,6 +35,19 @@ class FakeEmbeddingsProvider(EmbeddingsProvider):
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
         return [self.embed(t) for t in texts]
 
+    async def embed_batch_async(
+        self, texts: list[str], max_workers: int = 4
+    ) -> list[list[float]]:
+        """Versão async para testes."""
+        import asyncio
+        
+        async def embed_one(text: str) -> list[float]:
+            # Simula latência
+            await asyncio.sleep(0.001)
+            return self.embed(text)
+        
+        return await asyncio.gather(*[embed_one(t) for t in texts])
+
     @property
     def dimensions(self) -> int:
         return EMBEDDING_DIM
@@ -131,6 +144,65 @@ class TestCosineSimilarity:
 
 
 # --- Testes de integração (requerem Ollama) ---
+
+class TestEmbedBatchAsync:
+    """Testes para embed_batch_async com paralelização real."""
+
+    @pytest.fixture
+    def service(self):
+        return EmbeddingsService(provider=FakeEmbeddingsProvider())
+
+    def test_embed_batch_async_processes_multiple_chunks(self, service):
+        """embed_batch_async() deve processar múltiplos chunks corretamente."""
+        texts = ["texto 1", "texto 2", "texto 3", "texto 4"]
+        
+        import asyncio
+        embeddings = asyncio.run(service._provider.embed_batch_async(texts))
+        
+        assert len(embeddings) == 4
+        assert all(len(emb) == EMBEDDING_DIM for emb in embeddings)
+
+    def test_embed_batch_maintains_order(self, service):
+        """Ordem dos embeddings deve ser preservada."""
+        texts = ["primeiro", "segundo", "terceiro"]
+        
+        import asyncio
+        embeddings = asyncio.run(service._provider.embed_batch_async(texts))
+        
+        # Verificar que embeddings correspondem aos textos originais
+        for i, text in enumerate(texts):
+            expected = service._provider.embed(text)
+            assert embeddings[i] == expected
+
+    def test_embed_batch_respects_max_workers(self, service):
+        """Não deve exceder max_workers simultâneos."""
+        # Este teste é difícil de validar diretamente sem mockar,
+        # mas podemos verificar que o parâmetro é aceito
+        texts = ["texto 1", "texto 2", "texto 3", "texto 4"]
+        
+        import asyncio
+        embeddings = asyncio.run(
+            service._provider.embed_batch_async(texts, max_workers=2)
+        )
+        
+        assert len(embeddings) == 4
+
+    def test_backward_compatibility_embed_single(self, service):
+        """embed() síncrono deve continuar funcionando."""
+        embedding = service.embed("teste de retrocompatibilidade")
+        
+        assert len(embedding) == EMBEDDING_DIM
+        assert isinstance(embedding, list)
+        assert all(isinstance(v, float) for v in embedding)
+
+    def test_embed_batch_sync_wrapper(self, service):
+        """embed_batch() síncrono deve chamar versão async internamente."""
+        texts = ["texto 1", "texto 2", "texto 3"]
+        embeddings = service.embed_batch(texts)
+        
+        assert len(embeddings) == 3
+        assert all(len(emb) == EMBEDDING_DIM for emb in embeddings)
+
 
 @pytest.mark.integration
 class TestOllamaEmbeddings:

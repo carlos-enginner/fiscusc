@@ -20,6 +20,13 @@ class EmbeddingsProvider(ABC):
         """Gera embeddings para múltiplos textos."""
         ...
 
+    @abstractmethod
+    async def embed_batch_async(
+        self, texts: list[str], max_workers: int = 4
+    ) -> list[list[float]]:
+        """Gera embeddings para múltiplos textos de forma assíncrona."""
+        ...
+
     @property
     @abstractmethod
     def dimensions(self) -> int:
@@ -34,6 +41,7 @@ class OllamaEmbeddingsProvider(EmbeddingsProvider):
         settings = get_settings()
         self._model = model or settings.embedding_model
         self._client = Client(host=base_url or settings.ollama_base_url)
+        self._base_url = base_url or settings.ollama_base_url
 
     def embed(self, text: str) -> list[float]:
         """Gera embedding via Ollama."""
@@ -41,8 +49,40 @@ class OllamaEmbeddingsProvider(EmbeddingsProvider):
         return response["embedding"]
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
-        """Gera embeddings para múltiplos textos (sequencial)."""
-        return [self.embed(t) for t in texts]
+        """Gera embeddings para múltiplos textos (agora usando async)."""
+        import asyncio
+        return asyncio.run(self.embed_batch_async(texts))
+
+    async def embed_batch_async(
+        self, texts: list[str], max_workers: int = 4
+    ) -> list[list[float]]:
+        """
+        Gera embeddings em paralelo com controle de concorrência.
+        
+        Args:
+            texts: Lista de textos
+            max_workers: Máximo de requisições simultâneas
+            
+        Returns:
+            Lista de embeddings na mesma ordem dos textos
+        """
+        import asyncio
+        import httpx
+        
+        semaphore = asyncio.Semaphore(max_workers)
+        
+        async def embed_one(text: str) -> list[float]:
+            async with semaphore:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    response = await client.post(
+                        f"{self._base_url}/api/embeddings",
+                        json={"model": self._model, "prompt": text}
+                    )
+                    response.raise_for_status()
+                    return response.json()["embedding"]
+        
+        # Processar todos em paralelo mantendo ordem
+        return await asyncio.gather(*[embed_one(t) for t in texts])
 
     @property
     def dimensions(self) -> int:
@@ -65,8 +105,14 @@ class EmbeddingsService:
         return self._provider.embed(text)
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
-        """Gera embeddings para múltiplos textos."""
+        """Gera embeddings para múltiplos textos (usa async internamente)."""
         return self._provider.embed_batch(texts)
+
+    async def embed_batch_async(
+        self, texts: list[str], max_workers: int = 4
+    ) -> list[list[float]]:
+        """Gera embeddings de forma assíncrona."""
+        return await self._provider.embed_batch_async(texts, max_workers)
 
     @property
     def dimensions(self) -> int:

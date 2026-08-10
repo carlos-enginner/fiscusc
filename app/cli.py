@@ -21,6 +21,63 @@ from app.rag.retriever import DocumentRetriever
 console = Console()
 
 
+def _format_time(ms: float) -> str:
+    """Formata milissegundos para formato legível (m:s ou Xs)."""
+    seconds = ms / 1000
+    if seconds >= 60:
+        minutes = int(seconds // 60)
+        secs = int(seconds % 60)
+        return f"{minutes}m {secs}s"
+    return f"{seconds:.0f}s"
+
+
+def _display_metrics_panel(metrics) -> None:
+    """Exibe painel de métricas de performance após ingestão."""
+    # Verificar se metrics é um objeto válido com os atributos necessários
+    if not hasattr(metrics, 'total_ms') or not isinstance(metrics.total_ms, (int, float)):
+        return
+
+    total_ms = metrics.total_ms
+    if total_ms <= 0:
+        return
+
+    # Calcular percentuais
+    def pct(value: float) -> int:
+        return int((value / total_ms) * 100) if total_ms > 0 else 0
+
+    extraction_pct = pct(metrics.extraction_ms)
+    chunking_pct = pct(metrics.chunking_ms)
+    embedding_pct = pct(metrics.embedding_ms)
+    db_pct = pct(metrics.db_ms)
+
+    # Cache hits percentual
+    total_cache_ops = metrics.cache_hits + metrics.cache_misses
+    cache_hit_pct = int((metrics.cache_hits / total_cache_ops) * 100) if total_cache_ops > 0 else 0
+
+    # Incremental reuse percentual
+    total_chunks = metrics.chunks_count
+    incremental_pct = int((metrics.incremental_reused / total_chunks) * 100) if total_chunks > 0 else 0
+
+    # Montar o conteúdo do painel
+    lines = [
+        f"[bold]Tempo Total:[/]        {_format_time(total_ms)}",
+        f"├─ Extração:        {_format_time(metrics.extraction_ms):8s} ({extraction_pct}%)",
+        f"├─ Chunking:        {_format_time(metrics.chunking_ms):8s} ({chunking_pct}%)",
+        f"├─ Embeddings:      {_format_time(metrics.embedding_ms):8s} ({embedding_pct}%)",
+        f"└─ Banco de Dados:  {_format_time(metrics.db_ms):8s} ({db_pct}%)",
+        "",
+        f"[bold]Throughput:[/]         {metrics.chunks_per_sec:.1f} chunks/sec",
+        f"[bold]Cache Hits:[/]         {metrics.cache_hits} ({cache_hit_pct}%)",
+        f"[bold]Incremental Reuse:[/]  {metrics.incremental_reused} ({incremental_pct}%)",
+    ]
+
+    console.print(Panel(
+        "\n".join(lines),
+        title="Métricas de Performance",
+        border_style="cyan",
+    ))
+
+
 @click.group()
 def cli():
     """Fiscus-C — Sistema inteligente de gestão de condomínios."""
@@ -35,7 +92,7 @@ def cli():
 @click.option("--version", default=None, help="Versão do documento")
 def ingest(pdf_path: Path, document_type: str, version: str | None):
     """Ingere um documento PDF no sistema."""
-    console.print(f"[bold blue]Ingerindo[/] {pdf_path.name} como [yellow]{document_type}[/]...")
+    console.print(f"[bold blue]Ingerindo[/] {pdf_path.name} como [yellow]{document_type}[/]...\n")
 
     try:
         engine = get_engine()
@@ -45,32 +102,75 @@ def ingest(pdf_path: Path, document_type: str, version: str | None):
         embeddings = EmbeddingsService()
         svc = DocumentIngestionService(embeddings_service=embeddings, db_session=db)
 
-        from rich.progress import Progress, BarColumn, TaskProgressColumn, TimeElapsedColumn, TextColumn
+        from rich.progress import Progress, BarColumn, TaskProgressColumn, TimeElapsedColumn, TextColumn, SpinnerColumn
+        from app.rag.ingestion import ProgressCallbacks
 
         with Progress(
+            SpinnerColumn(),
             TextColumn("[bold blue]{task.description}"),
             BarColumn(),
             TaskProgressColumn(),
             TimeElapsedColumn(),
-            TextColumn("[dim]{task.fields[chunk]}"),
             console=console,
+            transient=False,
         ) as progress:
-            task = progress.add_task("Gerando embeddings...", total=None, chunk="")
+            # Criar tasks para cada fase
+            tasks = {
+                "extraction": progress.add_task("[cyan]Extraindo PDF...", total=None, visible=True),
+                "chunking": progress.add_task("[cyan]Chunking...", total=None, visible=False),
+                "embedding": progress.add_task("[cyan]Gerando embeddings...", total=None, visible=False),
+                "saving": progress.add_task("[cyan]Salvando no banco...", total=None, visible=False),
+            }
+            current_phase = [None]  # Usar lista para permitir modificação no closure
 
-            def on_progress(current: int, total: int, chunk_text: str):
-                progress.update(task, total=total, completed=current, chunk=chunk_text)
+            def on_phase_start(phase: str):
+                current_phase[0] = phase
+                progress.update(tasks[phase], visible=True)
+            
+            def on_phase_end(phase: str):
+                # Marcar como completo
+                task = tasks[phase]
+                total = progress.tasks[task].total
+                if total:
+                    progress.update(task, completed=total)
+                else:
+                    progress.update(task, total=1, completed=1)
+
+            def on_extraction_progress(current: int, total: int):
+                progress.update(tasks["extraction"], total=total, completed=current,
+                               description=f"[cyan]Extraindo PDF... ({total} páginas)")
+
+            def on_chunking_progress(current: int, total: int):
+                progress.update(tasks["chunking"], total=total, completed=current,
+                               description=f"[cyan]Chunking... ({total} chunks)")
+
+            def on_embedding_progress(current: int, total: int):
+                progress.update(tasks["embedding"], total=total, completed=current,
+                               description=f"[cyan]Gerando embeddings... {current}/{total}")
+
+            def on_saving_progress(current: int, total: int):
+                progress.update(tasks["saving"], total=total, completed=current)
+
+            callbacks = ProgressCallbacks(
+                on_phase_start=on_phase_start,
+                on_phase_end=on_phase_end,
+                on_extraction_progress=on_extraction_progress,
+                on_chunking_progress=on_chunking_progress,
+                on_embedding_progress=on_embedding_progress,
+                on_saving_progress=on_saving_progress,
+            )
 
             result = svc.ingest(
                 path=pdf_path,
                 document_type=document_type,
                 version=version,
-                on_progress=on_progress,
+                progress_callbacks=callbacks,
             )
 
         db.close()
 
         if result.already_existed:
-            console.print(f"[yellow]⚠ Documento já existe[/] (id: {result.document_id})")
+            console.print(f"\n[yellow]⚠ Documento já existe[/] (id: {result.document_id})")
         else:
             console.print(Panel(
                 f"[green]✓ Documento ingerido com sucesso[/]\n"
@@ -81,6 +181,10 @@ def ingest(pdf_path: Path, document_type: str, version: str | None):
                 title="Ingestão concluída",
                 border_style="green",
             ))
+
+            # Exibir métricas de performance se disponíveis
+            if result.metrics:
+                _display_metrics_panel(result.metrics)
 
     except Exception as e:
         console.print(f"[red]✗ Erro:[/] {e}")

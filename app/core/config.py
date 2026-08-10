@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     top_k_results: int = 10
     min_similarity_score: float = 0.3
 
+    # Performance Tuning
+    embedding_batch_size: int = 16
+    embedding_max_workers: int = 4
+    enable_embedding_cache: bool = True
+    enable_incremental_ingest: bool = True
+
     @field_validator("log_level")
     @classmethod
     def validate_log_level(cls, v: str) -> str:
@@ -55,6 +61,20 @@ class Settings(BaseSettings):
     def validate_top_k(cls, v: int) -> int:
         if v < 1:
             raise ValueError("top_k_results deve ser >= 1")
+        return v
+
+    @field_validator("embedding_batch_size")
+    @classmethod
+    def validate_batch_size(cls, v: int) -> int:
+        if v < 1 or v > 64:
+            raise ValueError("embedding_batch_size deve estar entre 1 e 64")
+        return v
+
+    @field_validator("embedding_max_workers")
+    @classmethod
+    def validate_max_workers(cls, v: int) -> int:
+        if v < 1 or v > 32:
+            raise ValueError("embedding_max_workers deve estar entre 1 e 32")
         return v
 
 

@@ -167,3 +167,219 @@ class TestCLIIntegration:
         ])
         assert result.exit_code == 0
         assert "chunks" in result.output.lower() or "existe" in result.output.lower()
+
+
+class TestProgressCallbacks:
+    """Testes para o sistema de callbacks de progresso por fase."""
+
+    def test_progress_callbacks_dataclass_defaults(self):
+        """ProgressCallbacks deve ter todos callbacks como None por padrão."""
+        from app.rag.ingestion import ProgressCallbacks
+        
+        cb = ProgressCallbacks()
+        
+        assert cb.on_phase_start is None
+        assert cb.on_phase_end is None
+        assert cb.on_extraction_progress is None
+        assert cb.on_chunking_progress is None
+        assert cb.on_embedding_progress is None
+        assert cb.on_saving_progress is None
+
+    def test_progress_callbacks_accepts_callables(self):
+        """ProgressCallbacks deve aceitar funções como callbacks."""
+        from app.rag.ingestion import ProgressCallbacks
+        
+        phase_starts = []
+        phase_ends = []
+        extraction_progress = []
+        
+        cb = ProgressCallbacks(
+            on_phase_start=lambda p: phase_starts.append(p),
+            on_phase_end=lambda p: phase_ends.append(p),
+            on_extraction_progress=lambda c, t: extraction_progress.append((c, t)),
+        )
+        
+        cb.on_phase_start("extraction")
+        cb.on_phase_end("extraction")
+        cb.on_extraction_progress(10, 100)
+        
+        assert phase_starts == ["extraction"]
+        assert phase_ends == ["extraction"]
+        assert extraction_progress == [(10, 100)]
+
+    def test_ingest_calls_phase_callbacks(self):
+        """ingest() deve chamar callbacks de início/fim de fase."""
+        from app.rag.ingestion import DocumentIngestionService, ProgressCallbacks
+        
+        phases_started = []
+        phases_ended = []
+        
+        mock_result = MagicMock()
+        mock_result.document_id = "test-uuid"
+        mock_result.pages = 5
+        mock_result.chunks_created = 10
+        mock_result.sha256 = "abc123" * 11
+        mock_result.already_existed = False
+        mock_result.filename = "test.pdf"
+        mock_result.document_type = "regimento"
+        mock_result.status = "success"
+        mock_result.metrics = MagicMock()
+
+        with patch("app.rag.ingestion.extract_pdf") as mock_extract, \
+             patch("app.rag.ingestion.chunk_pages") as mock_chunk, \
+             patch("app.rag.ingestion.calculate_sha256", return_value="abc123" * 11), \
+             patch("app.rag.ingestion.get_file_size", return_value=1000), \
+             patch("app.rag.ingestion.get_settings") as mock_settings:
+            
+            # Setup mocks
+            mock_settings.return_value = MagicMock(
+                enable_embedding_cache=False,
+                enable_incremental_ingest=False,
+                embedding_batch_size=16,
+            )
+            mock_extract.return_value = [MagicMock(page=1, text="test")]
+            
+            mock_chunk_obj = MagicMock()
+            mock_chunk_obj.content = "test content"
+            mock_chunk_obj.page = 1
+            mock_chunk_obj.section = None
+            mock_chunk_obj.chapter = None
+            mock_chunk_obj.article = None
+            mock_chunk_obj.chunk_index = 0
+            mock_chunk_obj.content_length = 12
+            mock_chunk.return_value = [mock_chunk_obj]
+            
+            mock_embeddings = MagicMock()
+            mock_embeddings.embed_batch.return_value = [[0.1] * 1024]
+            
+            mock_db = MagicMock()
+            mock_db.query.return_value.filter.return_value.first.return_value = None
+            
+            svc = DocumentIngestionService(
+                embeddings_service=mock_embeddings,
+                db_session=mock_db,
+            )
+            # Override cache
+            svc._cache = None
+            
+            callbacks = ProgressCallbacks(
+                on_phase_start=lambda p: phases_started.append(p),
+                on_phase_end=lambda p: phases_ended.append(p),
+            )
+            
+            svc.ingest(
+                path="test.pdf",
+                document_type="regimento",
+                progress_callbacks=callbacks,
+            )
+        
+        # Deve ter chamado todas as 4 fases
+        assert "extraction" in phases_started
+        assert "chunking" in phases_started
+        assert "embedding" in phases_started
+        assert "saving" in phases_started
+        
+        assert "extraction" in phases_ended
+        assert "chunking" in phases_ended
+        assert "embedding" in phases_ended
+        assert "saving" in phases_ended
+
+    def test_ingest_calls_embedding_progress(self):
+        """ingest() deve reportar progresso de embeddings."""
+        from app.rag.ingestion import DocumentIngestionService, ProgressCallbacks
+        
+        embedding_progress = []
+
+        with patch("app.rag.ingestion.extract_pdf") as mock_extract, \
+             patch("app.rag.ingestion.chunk_pages") as mock_chunk, \
+             patch("app.rag.ingestion.calculate_sha256", return_value="abc123" * 11), \
+             patch("app.rag.ingestion.get_file_size", return_value=1000), \
+             patch("app.rag.ingestion.get_settings") as mock_settings:
+            
+            mock_settings.return_value = MagicMock(
+                enable_embedding_cache=False,
+                enable_incremental_ingest=False,
+                embedding_batch_size=2,  # Batch pequeno para testar múltiplas chamadas
+            )
+            mock_extract.return_value = [MagicMock(page=1, text="test")]
+            
+            # Criar 4 chunks para testar 2 batches
+            chunks = []
+            for i in range(4):
+                c = MagicMock()
+                c.content = f"content {i}"
+                c.page = 1
+                c.section = None
+                c.chapter = None
+                c.article = None
+                c.chunk_index = i
+                c.content_length = 10
+                chunks.append(c)
+            mock_chunk.return_value = chunks
+            
+            mock_embeddings = MagicMock()
+            mock_embeddings.embed_batch.return_value = [[0.1] * 1024, [0.2] * 1024]
+            
+            mock_db = MagicMock()
+            mock_db.query.return_value.filter.return_value.first.return_value = None
+            
+            svc = DocumentIngestionService(
+                embeddings_service=mock_embeddings,
+                db_session=mock_db,
+            )
+            svc._cache = None
+            
+            callbacks = ProgressCallbacks(
+                on_embedding_progress=lambda c, t: embedding_progress.append((c, t)),
+            )
+            
+            svc.ingest(
+                path="test.pdf",
+                document_type="regimento",
+                progress_callbacks=callbacks,
+            )
+        
+        # Com 4 chunks e batch_size=2, deve ter 2 updates de progresso
+        assert len(embedding_progress) == 2
+        assert embedding_progress[0] == (2, 4)  # Após primeiro batch
+        assert embedding_progress[1] == (4, 4)  # Após segundo batch
+
+    def test_cli_ingest_uses_progress_callbacks(self):
+        """CLI ingest deve usar o novo sistema de callbacks."""
+        mock_result = MagicMock()
+        mock_result.document_id = "test-uuid"
+        mock_result.pages = 10
+        mock_result.chunks_created = 45
+        mock_result.sha256 = "abc123" * 11
+        mock_result.already_existed = False
+        mock_result.filename = "reg_interno.pdf"
+        mock_result.document_type = "regimento"
+        mock_result.status = "success"
+        mock_result.metrics = MagicMock()
+        mock_result.metrics.total_ms = 5000
+        mock_result.metrics.extraction_ms = 1000
+        mock_result.metrics.chunking_ms = 500
+        mock_result.metrics.embedding_ms = 3000
+        mock_result.metrics.db_ms = 500
+        mock_result.metrics.chunks_count = 45
+        mock_result.metrics.cache_hits = 10
+        mock_result.metrics.cache_misses = 35
+        mock_result.metrics.incremental_reused = 0
+        mock_result.metrics.chunks_per_sec = 9.0
+
+        with patch("app.cli.DocumentIngestionService") as mock_svc_cls, \
+             patch("app.cli.EmbeddingsService"), \
+             patch("app.cli.get_engine"), \
+             patch("app.cli.get_session_factory"):
+            mock_svc = MagicMock()
+            mock_svc.ingest.return_value = mock_result
+            mock_svc_cls.return_value = mock_svc
+
+            result = runner.invoke(cli, ["ingest", str(PDF_PATH), "--type", "regimento"])
+            
+            # Verificar que ingest foi chamado com progress_callbacks
+            call_kwargs = mock_svc.ingest.call_args.kwargs
+            assert "progress_callbacks" in call_kwargs
+            assert call_kwargs["progress_callbacks"] is not None
+
+        assert result.exit_code == 0
