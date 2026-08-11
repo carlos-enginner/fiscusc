@@ -41,3 +41,9 @@ ruff==0.9.1
 
 # Google Gemini (opcional — necessário se LLM_PROVIDER=gemini)
 google-genai==1.26.0
+
+# FastEmbed (opcional — necessário se EMBEDDING_PROVIDER=fastembed)
+fastembed>=0.2.0
+
+# Reranker (opcional — melhora precisão do retrieval)
+sentence-transformers>=2.2.0

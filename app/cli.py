@@ -1,4 +1,5 @@
 """CLI do Fiscus-C — comandos de linha de comando."""
+import logging
 import sys
 from pathlib import Path
 
@@ -19,6 +20,55 @@ from app.rag.ingestion import DocumentIngestionService
 from app.rag.retriever import DocumentRetriever
 
 console = Console()
+logger = logging.getLogger(__name__)
+
+
+def _validate_embeddings() -> None:
+    """
+    Valida que as dimensões do provider de embeddings correspondem ao banco.
+    
+    Raises:
+        SystemExit: Se houver mismatch de dimensões.
+    """
+    from app.core.config import get_settings
+    from app.embeddings.factory import create_embedding_provider
+    from app.embeddings.validator import (
+        EmbeddingDimensionMismatchError,
+        validate_embedding_dimensions,
+    )
+    
+    settings = get_settings()
+    
+    try:
+        provider = create_embedding_provider(settings)
+        engine = get_engine()
+        
+        # Logar info do provider
+        provider_name = settings.embedding_provider
+        model_name = (
+            settings.fastembed_model 
+            if provider_name == "fastembed" 
+            else settings.embedding_model
+        )
+        console.print(
+            f"[dim]Embedding provider: {provider_name} "
+            f"(model: {model_name}, dimensions: {provider.dimensions})[/]"
+        )
+        
+        # Warning para Ollama
+        if provider_name == "ollama":
+            console.print(
+                "[yellow]⚠ Usando Ollama para embeddings. "
+                "Considere usar FastEmbed (EMBEDDING_PROVIDER=fastembed) "
+                "para melhor performance.[/]"
+            )
+        
+        # Validar dimensões
+        validate_embedding_dimensions(provider, engine)
+        
+    except EmbeddingDimensionMismatchError as e:
+        console.print(f"[red bold]✗ Erro de configuração de embeddings:[/]\n{e}")
+        sys.exit(1)
 
 
 def _format_time(ms: float) -> str:
@@ -93,6 +143,9 @@ def cli():
 def ingest(pdf_path: Path, document_type: str, version: str | None):
     """Ingere um documento PDF no sistema."""
     console.print(f"[bold blue]Ingerindo[/] {pdf_path.name} como [yellow]{document_type}[/]...\n")
+
+    # Validar dimensões de embeddings antes de processar
+    _validate_embeddings()
 
     try:
         engine = get_engine()
@@ -201,6 +254,9 @@ def query(question: str, agent: str | None):
     import time
     t_inicio = time.time()
     console.print(f"[bold blue]Pergunta:[/] {question}\n")
+
+    # Validar dimensões de embeddings antes de processar
+    _validate_embeddings()
 
     try:
         from app.core.config import get_settings

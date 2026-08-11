@@ -66,7 +66,7 @@ class DocumentChunk(Base):
     chunk_index = Column(Integer, nullable=False)
     content = Column(TEXT, nullable=False)
     content_length = Column(Integer, nullable=False)
-    embedding = Column(Vector(1024), nullable=True)  # Qwen3-Embedding-0.6B
+    embedding = Column(Vector(384), nullable=True)  # Dinâmico: veja FASTEMBED_MODEL
     content_hash = Column(VARCHAR(64), nullable=True, index=True)
     metadata_ = Column("metadata", JSONB, default=dict)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

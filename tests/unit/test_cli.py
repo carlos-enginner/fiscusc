@@ -67,7 +67,8 @@ class TestCLIIngest:
         mock_result.document_type = "regimento"
         mock_result.status = "success"
 
-        with patch("app.cli.DocumentIngestionService") as mock_svc_cls, \
+        with patch("app.cli._validate_embeddings"), \
+             patch("app.cli.DocumentIngestionService") as mock_svc_cls, \
              patch("app.cli.EmbeddingsService"), \
              patch("app.cli.get_engine"), \
              patch("app.cli.get_session_factory"):
@@ -96,7 +97,8 @@ class TestCLIIngest:
         mock_result.document_id = "existing-uuid"
         mock_result.already_existed = True
 
-        with patch("app.cli.DocumentIngestionService") as mock_svc_cls, \
+        with patch("app.cli._validate_embeddings"), \
+             patch("app.cli.DocumentIngestionService") as mock_svc_cls, \
              patch("app.cli.EmbeddingsService"), \
              patch("app.cli.get_engine"), \
              patch("app.cli.get_session_factory"):
@@ -120,7 +122,8 @@ class TestCLIQuery:
             "classifications": [],
         }
 
-        with patch("app.cli.FiscusWorkflow") as mock_wf_cls, \
+        with patch("app.cli._validate_embeddings"), \
+             patch("app.cli.FiscusWorkflow") as mock_wf_cls, \
              patch("app.cli.DocsAgent"), \
              patch("app.cli.FinanceAgent"), \
              patch("app.cli.QueryClassifier"), \
@@ -367,7 +370,8 @@ class TestProgressCallbacks:
         mock_result.metrics.incremental_reused = 0
         mock_result.metrics.chunks_per_sec = 9.0
 
-        with patch("app.cli.DocumentIngestionService") as mock_svc_cls, \
+        with patch("app.cli._validate_embeddings"), \
+             patch("app.cli.DocumentIngestionService") as mock_svc_cls, \
              patch("app.cli.EmbeddingsService"), \
              patch("app.cli.get_engine"), \
              patch("app.cli.get_session_factory"):

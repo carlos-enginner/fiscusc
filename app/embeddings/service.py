@@ -93,12 +93,16 @@ class EmbeddingsService:
     """
     Serviço de embeddings.
 
-    Usa OllamaEmbeddingsProvider por padrão.
+    Usa factory para criar provider baseado na configuração.
     Provider pode ser trocado via DI para testes ou outros backends.
     """
 
     def __init__(self, provider: EmbeddingsProvider | None = None):
-        self._provider = provider or OllamaEmbeddingsProvider()
+        if provider is None:
+            from app.embeddings.factory import create_embedding_provider
+
+            provider = create_embedding_provider()
+        self._provider = provider
 
     def embed(self, text: str) -> list[float]:
         """Gera embedding para um texto."""

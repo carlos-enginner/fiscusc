@@ -113,6 +113,44 @@ class TestSettings:
         settings = Settings(embedding_max_workers=4)
         assert settings.embedding_max_workers == 4
 
+    def test_embedding_provider_defaults_to_ollama(self):
+        """embedding_provider deve ter valor padrão 'ollama'."""
+        from app.core.config import Settings
+
+        settings = Settings()
+        assert settings.embedding_provider == "ollama"
+
+    def test_embedding_provider_accepts_fastembed(self):
+        """embedding_provider deve aceitar 'fastembed'."""
+        from app.core.config import Settings
+
+        settings = Settings(embedding_provider="fastembed")
+        assert settings.embedding_provider == "fastembed"
+
+    def test_embedding_provider_normalizes_to_lowercase(self):
+        """embedding_provider deve normalizar para lowercase."""
+        from app.core.config import Settings
+
+        settings = Settings(embedding_provider="FASTEMBED")
+        assert settings.embedding_provider == "fastembed"
+
+        settings2 = Settings(embedding_provider="OlLaMa")
+        assert settings2.embedding_provider == "ollama"
+
+    def test_embedding_provider_rejects_invalid_value(self):
+        """embedding_provider deve rejeitar valores inválidos."""
+        from app.core.config import Settings
+
+        with pytest.raises(Exception):
+            Settings(embedding_provider="invalid_provider")
+
+    def test_fastembed_model_has_default(self):
+        """fastembed_model deve ter valor padrão."""
+        from app.core.config import Settings
+
+        settings = Settings()
+        assert settings.fastembed_model == "intfloat/multilingual-e5-small"
+
 
 @pytest.mark.integration
 class TestDatabaseConnection:

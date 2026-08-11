@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     embedding_model: str = "qwen3-embedding:0.6b"
     llm_model: str = "qwen3:8b"
 
+    # Embedding Provider: "ollama" ou "fastembed"
+    embedding_provider: str = "ollama"
+    fastembed_model: str = "intfloat/multilingual-e5-small"
+
     # LLM Provider: "ollama" ou "gemini"
     llm_provider: str = "ollama"
     google_api_key: str = ""
@@ -48,6 +52,15 @@ class Settings(BaseSettings):
         if upper not in allowed:
             raise ValueError(f"log_level deve ser um de: {allowed}")
         return upper
+
+    @field_validator("embedding_provider")
+    @classmethod
+    def validate_embedding_provider(cls, v: str) -> str:
+        allowed = {"ollama", "fastembed"}
+        lower = v.lower()
+        if lower not in allowed:
+            raise ValueError(f"embedding_provider deve ser um de: {allowed}")
+        return lower
 
     @field_validator("chunk_size")
     @classmethod

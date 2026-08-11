@@ -331,14 +331,93 @@ alembic upgrade head
 
 ### Embeddings com dimensão errada
 
-Se mudar o modelo de embedding, a dimensão do vetor muda. É necessário:
+Se mudar o modelo de embedding (ou trocar de `ollama` para `fastembed`), a dimensão do vetor muda e você verá um erro como:
+
+```
+different vector dimensions 1024 and 384
+```
+
+Isso acontece porque os chunks antigos foram indexados com um modelo de dimensão diferente. Para resolver:
 
 ```bash
 # Rodar downgrade e upgrade para recriar o schema
 alembic downgrade base
 alembic upgrade head
+
 # Re-ingerir todos os documentos
+python -m app.cli ingest fixtures/reg_interno.pdf --type regimento
+python -m app.cli ingest fixtures/convencao.pdf --type convencao
 ```
+
+> **Importante**: Isso apaga todos os chunks existentes. Se você tem muitos documentos, considere fazer backup antes.
+
+---
+
+## Benchmark de Embeddings
+
+O projeto suporta dois providers de embeddings:
+
+| Provider | Modelo | Dimensões | Vantagens |
+|---|---|---|---|
+| `ollama` | `qwen3-embedding:0.6b` | 1024 | Maior precisão semântica, integração nativa |
+| `fastembed` | `intfloat/multilingual-e5-small` | 384 | 10-50x mais rápido, sem GPU, menor uso de memória |
+
+### Rodando o Benchmark
+
+```bash
+# Ver opções disponíveis
+python -m scripts.benchmark_embeddings --help
+
+# Benchmark rápido (poucos textos)
+python -m scripts.benchmark_embeddings
+
+# Benchmark completo com mais textos
+python -m scripts.benchmark_embeddings --num-texts 50
+
+# Comparar apenas um provider
+python -m scripts.benchmark_embeddings --provider ollama
+python -m scripts.benchmark_embeddings --provider fastembed
+```
+
+### Exemplo de Saída
+
+```
+=== Benchmark de Embeddings ===
+
+Provider: ollama (qwen3-embedding:0.6b)
+  Dimensões: 1024
+  Tempo total: 12.34s
+  Média por texto: 0.617s
+  Throughput: 1.62 textos/s
+
+Provider: fastembed (intfloat/multilingual-e5-small)
+  Dimensões: 384
+  Tempo total: 0.45s
+  Média por texto: 0.023s
+  Throughput: 44.44 textos/s
+
+Speedup: FastEmbed é 27.4x mais rápido que Ollama
+```
+
+### Migrando de Ollama para FastEmbed
+
+Se você já tem documentos indexados com Ollama e quer migrar para FastEmbed:
+
+```bash
+# 1. Atualizar .env
+EMBEDDING_PROVIDER=fastembed
+FASTEMBED_MODEL=intfloat/multilingual-e5-small
+
+# 2. Recriar tabelas (as dimensões do vetor mudam)
+alembic downgrade base
+alembic upgrade head
+
+# 3. Re-ingerir todos os documentos
+python -m app.cli ingest fixtures/reg_interno.pdf --type regimento
+python -m app.cli ingest fixtures/convencao.pdf --type convencao
+```
+
+> **Nota**: A migração apaga todos os chunks existentes. Se você tem muitos documentos, considere manter um backup antes.
 
 ---
 
@@ -348,7 +427,9 @@ alembic upgrade head
 |---|---|---|
 | `DATABASE_URL` | `postgresql://fiscusc:fiscusc@localhost:5432/fiscusc` | URL do PostgreSQL |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | URL do Ollama |
-| `EMBEDDING_MODEL` | `qwen3-embedding:0.6b` | Modelo de embeddings |
+| `EMBEDDING_PROVIDER` | `ollama` | Provider de embeddings: `ollama` (local) ou `fastembed` (CPU, mais rápido) |
+| `EMBEDDING_MODEL` | `qwen3-embedding:0.6b` | Modelo de embeddings (Ollama) |
+| `FASTEMBED_MODEL` | `intfloat/multilingual-e5-small` | Modelo de embeddings (FastEmbed) |
 | `LLM_MODEL` | `qwen3:8b` | Modelo de linguagem |
 | `CHUNK_SIZE` | `1000` | Tamanho máximo dos chunks |
 | `CHUNK_OVERLAP` | `200` | Sobreposição entre chunks |
